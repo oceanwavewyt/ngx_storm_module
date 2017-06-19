@@ -219,26 +219,6 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	r->main->count++;
 	ngx_http_upstream_init(r);
 	return NGX_DONE;
-	/*
-	ngx_chain_t out;
-	ngx_buf_t *b = ngx_create_temp_buf(r->pool, sizeof(ngx_buf_t));
-	if(b == NULL) {
-		return NGX_HTTP_INTERNAL_SERVER_ERROR;
-	}
-	out.buf = b;
-	out.next = NULL;	
-	ngx_str_set(&r->headers_out.content_type, "text/html");
-	b->pos = r->args.data;
-	b->last = r->args.data + r->args.len;
-	b->last_buf = 1;
-	r->headers_out.status = NGX_HTTP_OK;
-	r->headers_out.content_length_n = r->args.len;
-	ngx_int_t rc = ngx_http_send_header(r);
-	if(rc == NGX_ERROR || rc > NGX_OK  || r->header_only) {
-		return rc;
-	}	
-	return ngx_http_output_filter(r, &out);
-	*/
 } 
 
 
