@@ -703,11 +703,12 @@ static ngx_uint_t ngx_http_storm_url(ngx_http_request_t *r, ngx_str_t *argkey)
 	//find storm://131000023556
 	ctx->number = 0;
 	ngx_http_buf_find(r, start, last, &stormkey, &storm_pos);	
+	ngx_memset(ctx->storm_key,0, STORM_KEY_LEN);
 	ngx_snprintf(ctx->storm_key, STORM_KEY_LEN, "storm_");		
 	ngx_memcpy(ctx->storm_key+6, start,ctx->number-stormkey.len);	
 	ctx->argkey.data = ctx->storm_key;
 	ctx->argkey.len = ngx_strlen(ctx->storm_key);	
-	ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"storm_key: %s,start:%s", ctx->storm_key,start);
+	ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"argkey:%V, storm_key: %s,start:%s", &ctx->argkey, ctx->storm_key,start);
 	ngx_str_t pid;
 	ngx_str_set(&pid,"pid=");
 	ngx_str_t channel;
