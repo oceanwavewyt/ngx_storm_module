@@ -12,7 +12,7 @@ function ：
         listen 80;
     
         location  / { 
-            error_log logs/err_newcms.log  debug;
+            error_log logs/err_info.log  debug;
             storm_pass storm_redis;
         }
         error_page 404 @other;
