@@ -7,6 +7,7 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#define STORM_KEY_LEN	   30
 #define NGX_ESCAPE_STORM   4
 #define NGX_HTTP_STORM_END   (sizeof(ngx_http_redis_end) - 1)
 static u_char  ngx_http_redis_end[] = CRLF;                     
@@ -37,6 +38,8 @@ static void ngx_http_storm_finalize_request(ngx_http_request_t *r,
     ngx_int_t rc);
 //static ngx_int_t ngx_http_bufdata_replace(ngx_http_request_t *r,ngx_chain_t *chain, ngx_str_t *match);
 static void ngx_http_buf_find(ngx_http_request_t *r, u_char *pos, u_char *last, ngx_str_t *match, ngx_storm_pos_t *storm_pos);
+static ngx_uint_t ngx_http_storm_url(ngx_http_request_t *r, ngx_str_t *argkey);
+
 
 typedef struct {
     ngx_http_upstream_conf_t   upstream;
@@ -61,7 +64,8 @@ typedef struct {
 	ngx_chain_t 			   *out;
 	ngx_chain_t				   **last_out;
 	u_char 					   *start;
-	u_char					   *end;	
+	u_char					   *end;
+	u_char					   storm_key[STORM_KEY_LEN];	
 } ngx_http_storm_ctx_t;
 
 
@@ -154,9 +158,7 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	if (NGX_OK != ngx_http_arg(r,keyName.data,keyName.len, &argkey)) {
 		return NGX_ERROR;
 	}
-	//parser url and get storm key
-	//ngx_unescape_uri		
-
+	
 
 	if(ngx_http_upstream_create(r) != NGX_OK) {
 		return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -176,12 +178,18 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	ctx->argkey = argkey;
 	ctx->out = NULL;
     ctx->last_out = &ctx->out;
-	ngx_str_set(&ctx->pid, "newbox1/search/result/video.html");
-	ngx_str_set(&ctx->channel, "newbox");
+	ngx_http_set_ctx(r, ctx, ngx_storm_module);
+	
+	ngx_str_set(&ctx->pid, "");
+	ngx_str_set(&ctx->channel, "");
 	ngx_str_set(&ctx->code, "0");
 	ngx_str_set(&ctx->mat_pid, "{$pid}");
 	ngx_str_set(&ctx->mat_channel, "{$channel}");
 	ngx_str_set(&ctx->mat_code, "{$ad_code}");
+
+	//parser url and get storm key
+	//ngx_unescape_uri		
+	ngx_http_storm_url(r, &argkey);
 
 	ctx->mat_array = ngx_array_create(ctx->request->pool,3,sizeof(ngx_str_t));
 	ngx_str_t *mat = ngx_array_push(ctx->mat_array);
@@ -206,7 +214,6 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	mat->data = ctx->code.data;
 	mat->len = ctx->code.len;
 
-	ngx_http_set_ctx(r, ctx, ngx_storm_module);
 	
 	u->create_request = ngx_http_storm_create_request;
     u->reinit_request = ngx_http_storm_reinit_request;
@@ -545,7 +552,7 @@ static ngx_int_t ngx_http_storm_filter(void *data, ssize_t bytes)
 			ngx_str_t *pmat =(ngx_str_t *) ctx->arr->elts+i;
 			
 			ngx_storm_pos_t *storm_pos = ngx_array_push(pos_list);
-			ngx_http_buf_find(ctx->request, curpos, curlast, mat, storm_pos);		
+			ngx_http_buf_find(ctx->request,curpos, curlast, mat, storm_pos);		
 			if(storm_pos->end < curlast) {
 				storm_pos->found_start = storm_pos->end;
 				storm_pos->found_end = storm_pos->end+mat->len;
@@ -608,43 +615,6 @@ static ngx_int_t ngx_http_storm_filter(void *data, ssize_t bytes)
 		ngx_array_destroy(pos_list);
 	}
 	
-	/*	
-	for(;;) {
-		if(curpos >= curlast) break;
-		u_char **posfound = ngx_http_buf_find(ctx->request, curpos, curlast, &mat);
-	    cl = ngx_chain_get_free_buf(ctx->request->pool, &u->free_bufs);
-    	if (cl == NULL) {
-        	return NGX_ERROR;
-    	}
-    	cl->buf->flush = 1;
-    	cl->buf->memory = 1;
-    	*ll = cl;
-    	cl->buf->pos = posfound[0];
-    	curpos = posfound[1];
-    	cl->buf->last = curpos+1;
-    	cl->buf->tag = u->output.tag;
-		ll = &cl->next;
-		if(posfound[1] < curlast) {
-			ngx_log_debug1(NGX_LOG_DEBUG_HTTP, ctx->request->connection->log, 0,
-                   "duanxiao: %s", ctx->pid.data);
-			curpos += mat.len;
-			cl = ngx_chain_get_free_buf(ctx->request->pool, &u->free_bufs);
-    		if (cl == NULL) {
-        		return NGX_ERROR;
-    		}
-    		//cl->buf->flush = 1;
-    		cl->buf->shadow = NULL;
-    		cl->buf->memory = 1;
-			cl->buf->pos = ctx->pid.data;		
-			cl->buf->last = ctx->pid.data+ctx->pid.len;
-			cl->next = NULL; 
-			*ll = cl;
-			ll = &cl->next;
-		}	
-		curpos+=1;
-		*posfound = curpos;
-	}
-*/
 	b->last += bytes;
     ngx_log_debug4(NGX_LOG_DEBUG_HTTP, ctx->request->connection->log, 0,
                    "redis filter bytes:%z size:%z length:%z rest:%z",
@@ -708,6 +678,62 @@ ngx_http_storm_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
                    "finalize http redis request");
     return;
 }
+
+static ngx_uint_t ngx_http_storm_url(ngx_http_request_t *r, ngx_str_t *argkey)
+{
+	u_char *src,*dest;
+	src = argkey->data;
+	dest = argkey->data;
+	ngx_unescape_uri(&dest,&src,argkey->len,0);
+	*dest = '\0';
+	argkey->len = ngx_strlen(argkey->data);
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"cparams: %V", argkey);
+	u_char *last = argkey->data + argkey->len;
+	ngx_storm_pos_t storm_pos;
+	ngx_str_t stormkey;
+	ngx_str_set(&stormkey, "storm://");
+	ngx_http_storm_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_storm_module);
+	ngx_http_buf_find(r, argkey->data, last, &stormkey, &storm_pos); 			
+	if(storm_pos.end > last || storm_pos.end+stormkey.len >=last) {
+		return NGX_ERROR;
+	}
+	//find ||
+	u_char *start = storm_pos.end+stormkey.len;
+	ngx_str_set(&stormkey, "||");
+	//find storm://131000023556
+	ctx->number = 0;
+	ngx_http_buf_find(r, start, last, &stormkey, &storm_pos);	
+	ngx_snprintf(ctx->storm_key, STORM_KEY_LEN, "storm_");		
+	ngx_memcpy(ctx->storm_key+6, start,ctx->number-stormkey.len);	
+	ctx->argkey.data = ctx->storm_key;
+	ctx->argkey.len = ngx_strlen(ctx->storm_key);	
+	ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"storm_key: %s,start:%s", ctx->storm_key,start);
+	ngx_str_t pid;
+	ngx_str_set(&pid,"pid=");
+	ngx_str_t channel;
+	ngx_str_set(&channel,"channel=");
+
+	start += ctx->number;
+	while(start<=last){
+		ctx->number = 0;
+		ngx_http_buf_find(r, start, last, &stormkey, &storm_pos);
+		size_t len = ctx->number;
+		if(storm_pos.end < last) {
+			len = ctx->number-stormkey.len;
+		}
+		if(ngx_strncasecmp(start, pid.data,pid.len)==0) {
+			ctx->pid.data = start + pid.len;
+			ctx->pid.len = len - pid.len;
+		}else if(ngx_strncasecmp(start, channel.data,channel.len)==0) {
+			ctx->channel.data = start + channel.len;
+			ctx->channel.len = len - channel.len;
+		}
+		start += ctx->number;	
+	}
+	ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"channels: %V,pids:%V", &ctx->channel, &ctx->pid);
+	return NGX_OK;
+}
+
 
 static void ngx_http_buf_find(ngx_http_request_t *r, u_char *pos, u_char *last, ngx_str_t *match, ngx_storm_pos_t *storm_pos)
 {
