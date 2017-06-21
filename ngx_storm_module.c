@@ -158,7 +158,6 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	if (NGX_OK != ngx_http_arg(r,keyName.data,keyName.len, &argkey)) {
 		return NGX_ERROR;
 	}
-	
 
 	if(ngx_http_upstream_create(r) != NGX_OK) {
 		return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -188,8 +187,15 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	ngx_str_set(&ctx->mat_code, "{$ad_code}");
 
 	//parser url and get storm key
-	//ngx_unescape_uri		
-	ngx_http_storm_url(r, &argkey);
+	//ngx_unescape_uri
+	ngx_str_t argkey_storm;
+	argkey_storm.data = ngx_palloc(r->pool, sizeof(u_char)*argkey.len);		
+	if (argkey_storm.data == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+	ngx_memcpy(argkey_storm.data, argkey.data,argkey.len);
+	argkey_storm.len = argkey.len;
+	ngx_http_storm_url(r, &argkey_storm);
 
 	ctx->mat_array = ngx_array_create(ctx->request->pool,3,sizeof(ngx_str_t));
 	ngx_str_t *mat = ngx_array_push(ctx->mat_array);
@@ -721,9 +727,10 @@ static ngx_uint_t ngx_http_storm_url(ngx_http_request_t *r, ngx_str_t *argkey)
 	ngx_http_buf_find(r, start, last, &stormkey, &storm_pos);	
 	ngx_memset(ctx->storm_key,0, STORM_KEY_LEN);
 	ngx_snprintf(ctx->storm_key, STORM_KEY_LEN, "storm_");		
-	ngx_memcpy(ctx->storm_key+6, start,ctx->number-stormkey.len);	
+	ngx_memcpy(ctx->storm_key+6, start,ctx->number-stormkey.len);
+	*(ctx->storm_key+ctx->number) = '\0';	
 	ctx->argkey.data = ctx->storm_key;
-	ctx->argkey.len = ngx_strlen(ctx->storm_key);	
+	ctx->argkey.len = 6+ctx->number-stormkey.len;	
 	ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"argkey:%V, storm_key: %s,start:%s", &ctx->argkey, ctx->storm_key,start);
 	ngx_str_t pid;
 	ngx_str_set(&pid,"pid=");
