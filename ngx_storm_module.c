@@ -596,8 +596,6 @@ static ngx_int_t ngx_http_storm_filter(void *data, ssize_t bytes)
 			if (cl == NULL) {
 				return NGX_ERROR;
 			}
-			ngx_log_debug1(NGX_LOG_DEBUG_HTTP, ctx->request->connection->log, 0,
-                   "yyyyyyyyyyyyyyyyyy: %s", min_storm->needmat_start);
 			cl->buf->flush = 1;
 			cl->buf->memory = 1;
 			cl->buf->pos =  min_storm->needmat_start;       
@@ -681,24 +679,42 @@ ngx_http_storm_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 
 static ngx_uint_t ngx_http_storm_url(ngx_http_request_t *r, ngx_str_t *argkey)
 {
-	u_char *src,*dest;
+	u_char *src,*dest,*start,*last;
 	src = argkey->data;
 	dest = argkey->data;
+	ngx_storm_pos_t storm_pos;
+	ngx_str_t stormkey;
+	ngx_http_storm_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_storm_module);
+	//replace /7C/7C
+	ngx_str_set(&stormkey, "/");	
+	start = argkey->data;
+	last = argkey->data + argkey->len;
+	while(start<=last) {
+		ctx->number = 0;	
+		ngx_http_buf_find(r, start, last, &stormkey, &storm_pos);		
+		if(storm_pos.end < last) {
+			if(*(storm_pos.end+1) == '/') {
+				start = storm_pos.end + 2;
+				continue;
+			}
+			*storm_pos.end = '%';
+		}
+		start = storm_pos.end + stormkey.len;
+	}
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"argkey: %s", argkey->data);
 	ngx_unescape_uri(&dest,&src,argkey->len,0);
 	*dest = '\0';
 	argkey->len = ngx_strlen(argkey->data);
-	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"cparams: %V", argkey);
-	u_char *last = argkey->data + argkey->len;
-	ngx_storm_pos_t storm_pos;
-	ngx_str_t stormkey;
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"cparams: %s", argkey->data);
+	last = argkey->data + argkey->len;
+	
 	ngx_str_set(&stormkey, "storm://");
-	ngx_http_storm_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_storm_module);
 	ngx_http_buf_find(r, argkey->data, last, &stormkey, &storm_pos); 			
 	if(storm_pos.end > last || storm_pos.end+stormkey.len >=last) {
 		return NGX_ERROR;
 	}
 	//find ||
-	u_char *start = storm_pos.end+stormkey.len;
+	start = storm_pos.end+stormkey.len;
 	ngx_str_set(&stormkey, "||");
 	//find storm://131000023556
 	ctx->number = 0;
