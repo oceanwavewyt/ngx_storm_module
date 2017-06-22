@@ -6,6 +6,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <nginx.h>
 
 #define STORM_KEY_LEN	   30
 #define NGX_ESCAPE_STORM   4
@@ -229,7 +230,9 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	u->input_filter_init = ngx_http_storm_filter_init;
     u->input_filter = ngx_http_storm_filter;
 	u->input_filter_ctx = ctx;
-	r->main->count++;
+#if defined nginx_version && nginx_version >= 8011
+    r->main->count++;
+#endif	
 	ngx_http_upstream_init(r);
 	return NGX_DONE;
 } 
@@ -323,13 +326,13 @@ static ngx_int_t ngx_http_storm_create_request(ngx_http_request_t *r)
     *b->last++ = 'g'; *b->last++ = 'e'; *b->last++ = 't'; *b->last++ = ' ';
 
 	ctx->key.data = b->last;
-    //if (escape == 0) {
-    //    b->last = ngx_copy(b->last, key.data, key.len);
+    if (escape == 0) {
+        b->last = ngx_copy(b->last, key.data, key.len);
 
-    //} else {
+    } else {
         b->last = (u_char *) ngx_escape_uri(b->last, key.data, key.len,
                                            NGX_ESCAPE_STORM);
-    //}
+    }
 
 	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "http redis request: \"%V\"", &key);
@@ -429,7 +432,9 @@ found:
 
         u->headers_in.status_n = 404;
         u->state->status = 404;
+#if defined nginx_version && nginx_version >= 1001004
         u->keepalive = 1;
+#endif    
 
         return NGX_OK;
     }
@@ -690,9 +695,11 @@ static ngx_uint_t ngx_http_storm_url(ngx_http_request_t *r, ngx_str_t *argkey)
 	dest = argkey->data;
 	ngx_storm_pos_t storm_pos;
 	ngx_str_t stormkey;
+	ngx_str_t prekey;
 	ngx_http_storm_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_storm_module);
 	//replace /7C/7C
 	ngx_str_set(&stormkey, "/");	
+	ngx_str_set(&prekey, "storm_");
 	start = argkey->data;
 	last = argkey->data + argkey->len;
 	while(start<=last) {
@@ -726,12 +733,11 @@ static ngx_uint_t ngx_http_storm_url(ngx_http_request_t *r, ngx_str_t *argkey)
 	ctx->number = 0;
 	ngx_http_buf_find(r, start, last, &stormkey, &storm_pos);	
 	ngx_memset(ctx->storm_key,0, STORM_KEY_LEN);
-	ngx_snprintf(ctx->storm_key, STORM_KEY_LEN, "storm_");		
-	ngx_memcpy(ctx->storm_key+6, start,ctx->number-stormkey.len);
-	*(ctx->storm_key+ctx->number) = '\0';	
+	ngx_memcpy(ctx->storm_key+6,start,ctx->number-stormkey.len);
+	ngx_memcpy(ctx->storm_key, prekey.data, prekey.len);		
 	ctx->argkey.data = ctx->storm_key;
 	ctx->argkey.len = 6+ctx->number-stormkey.len;	
-	ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"argkey:%V, storm_key: %s,start:%s", &ctx->argkey, ctx->storm_key,start);
+	ngx_log_debug4(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,"argkey:%V,num:%d, storm_key: %s,start:%s", &ctx->argkey,ctx->number, ctx->storm_key,start);
 	ngx_str_t pid;
 	ngx_str_set(&pid,"pid=");
 	ngx_str_t channel;
