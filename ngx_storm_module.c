@@ -10,10 +10,17 @@
 
 #define STORM_KEY_LEN	   30
 #define NGX_ESCAPE_STORM   4
+#define STORM_MAT_LEN	   3
 #define NGX_HTTP_STORM_END   (sizeof(ngx_http_redis_end) - 1)
 static u_char  ngx_http_redis_end[] = CRLF;                     
 static ngx_str_t keyName = ngx_string("c");
 static ngx_str_t content_type = ngx_string("text/html;charset=utf8");
+
+typedef enum {
+	NEED_FIND,
+	OK_FOUND,
+	NO_FOUND
+} ngx_storm_found_t;
 
 typedef struct {
 	u_char	*start;
@@ -25,6 +32,13 @@ typedef struct {
 	size_t	pos_len;
 	size_t  found_size;
 } ngx_storm_pos_t;
+
+typedef struct {
+	u_char	*start;
+	u_char 	*end;
+	size_t len; 
+	ngx_storm_found_t  is_found;
+} ngx_storm_buf_t;
 
 static void *ngx_storm_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_storm_pass(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -62,6 +76,7 @@ typedef struct {
 	ngx_str_t				   mat_code;
 	ngx_array_t				   *arr;
 	ngx_array_t				   *mat_array;
+	ngx_array_t				   *mat_buf;
 	ngx_chain_t 			   *out;
 	ngx_chain_t				   **last_out;
 	u_char 					   *start;
@@ -198,7 +213,7 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	argkey_storm.len = argkey.len;
 	ngx_http_storm_url(r, &argkey_storm);
 
-	ctx->mat_array = ngx_array_create(ctx->request->pool,3,sizeof(ngx_str_t));
+	ctx->mat_array = ngx_array_create(ctx->request->pool,STORM_MAT_LEN,sizeof(ngx_str_t));
 	ngx_str_t *mat = ngx_array_push(ctx->mat_array);
 	mat->data = ctx->mat_pid.data;
 	mat->len = ctx->mat_pid.len;
@@ -209,8 +224,7 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	mat->data = ctx->mat_code.data;
 	mat->len = ctx->mat_code.len;
 
-
-	ctx->arr = ngx_array_create(ctx->request->pool,3,sizeof(ngx_str_t));
+	ctx->arr = ngx_array_create(ctx->request->pool,STORM_MAT_LEN,sizeof(ngx_str_t));
 	mat = ngx_array_push(ctx->arr);
 	mat->data = ctx->pid.data;
 	mat->len = ctx->pid.len;
@@ -221,6 +235,12 @@ static ngx_int_t ngx_http_storm_handler(ngx_http_request_t *r)
 	mat->data = ctx->code.data;
 	mat->len = ctx->code.len;
 
+	ctx->mat_buf = ngx_array_create(ctx->request->pool,STORM_MAT_LEN,sizeof(ngx_storm_buf_t));
+	int i;
+	for(i=0; i<STORM_MAT_LEN; i++){
+		ngx_storm_buf_t *sbuf = ngx_array_push(ctx->mat_buf);
+		sbuf->is_found = NEED_FIND;	
+	}
 	
 	u->create_request = ngx_http_storm_create_request;
     u->reinit_request = ngx_http_storm_reinit_request;
@@ -545,14 +565,17 @@ static ngx_int_t ngx_http_storm_filter(void *data, ssize_t bytes)
 	curpos = last;
 	curlast = b->last+bytes;
 
-	
-	
+	int j;
+	for(j=0; j<STORM_MAT_LEN; j++){
+		ngx_storm_buf_t *sbuf = (ngx_storm_buf_t *)ctx->mat_buf->elts+j;
+		sbuf->is_found = NEED_FIND;	
+	}
 	curpos = last;
 	for(;;) {
 		if(curpos >= curlast) break;
 		ngx_uint_t i=0;
 		ctx->number = 0;
-		ngx_array_t *pos_list = ngx_array_create(ctx->request->pool, 3, sizeof(ngx_storm_pos_t));	
+		ngx_array_t *pos_list = ngx_array_create(ctx->request->pool, STORM_MAT_LEN, sizeof(ngx_storm_pos_t));	
 		if(pos_list == NULL){
 			return NGX_HTTP_INTERNAL_SERVER_ERROR;
 		}
@@ -561,17 +584,31 @@ static ngx_int_t ngx_http_storm_filter(void *data, ssize_t bytes)
 		for(;i<ctx->mat_array->nelts;i++) {
 			ngx_str_t *mat =(ngx_str_t *)ctx->mat_array->elts+i;
 			ngx_str_t *pmat =(ngx_str_t *) ctx->arr->elts+i;
-			
+			ngx_storm_buf_t *mat_buf = (ngx_storm_buf_t *)ctx->mat_buf->elts+i;		
+	
 			ngx_storm_pos_t *storm_pos = ngx_array_push(pos_list);
-			ngx_http_buf_find(ctx->request,curpos, curlast, mat, storm_pos);		
+			if(mat_buf->is_found == NEED_FIND) {
+				ngx_http_buf_find(ctx->request,curpos, curlast, mat, storm_pos);		
+			}else{
+				storm_pos->start = mat_buf->start;
+				storm_pos->end = mat_buf->end;
+				ctx->number = mat_buf->len;	
+			}
 			if(storm_pos->end < curlast) {
 				storm_pos->found_start = storm_pos->end;
 				storm_pos->found_end = storm_pos->end+mat->len;
 				storm_pos->found_size = mat->len;
+				mat_buf->is_found = OK_FOUND;
+				mat_buf->start = storm_pos->start;
+				mat_buf->end = storm_pos->end;
+				mat_buf->len = ctx->number;
 			}else{
 				storm_pos->found_start = (void *)0;
 				storm_pos->found_end = (void *)0;
 				storm_pos->found_size = 0;
+				mat_buf->is_found = NO_FOUND;
+				mat_buf->start = curpos;
+				mat_buf->end = curlast;
 			}
 			
 			storm_pos->needmat_start = pmat->data;		
@@ -584,6 +621,16 @@ static ngx_int_t ngx_http_storm_filter(void *data, ssize_t bytes)
 			ngx_log_debug4(NGX_LOG_DEBUG_HTTP, ctx->request->connection->log, 0,
                    "wang_mat: %V,number:%d,min:%d,%s", mat,ctx->number,min,min_storm->needmat_start);
 			ctx->number = 0; 
+		}
+		for(j=0; j<STORM_MAT_LEN; j++){
+			ngx_storm_buf_t *sbuf = (ngx_storm_buf_t *)ctx->mat_buf->elts+j;
+			if(sbuf->is_found == OK_FOUND){
+				sbuf->len = sbuf->len - min;
+				sbuf->start = sbuf->start + min;
+				if(sbuf->len == 0) {
+					sbuf->is_found = NEED_FIND;
+				}
+			}	
 		}
 		cl = ngx_chain_get_free_buf(ctx->request->pool, &u->free_bufs);
     	if (cl == NULL) {
@@ -685,6 +732,7 @@ ngx_http_storm_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 {
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "finalize http redis request");
+	
     return;
 }
 
